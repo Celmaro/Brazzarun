@@ -14,6 +14,110 @@ SUPPORTED_EXECUTION_POLICIES = {
     "PAIR_LOCK",
 }
 
+# Venue floor: Polymarket CLOB rejects orders below 5 shares, and CTF
+# split/merge legs inherit the same floor so the bundle stays atomic.
+MIN_BUNDLE_EXECUTION_SHARES = 5.0
+
+
+def signal_payload(signal: Any) -> dict[str, Any]:
+    payload = getattr(signal, "payload_json", None)
+    return payload if isinstance(payload, dict) else {}
+
+
+def required_roster_market_ids(signal: Any) -> list[str]:
+    payload = signal_payload(signal)
+    roster = payload.get("market_roster")
+    if not isinstance(roster, dict):
+        return []
+    if str(roster.get("scope") or "").strip().lower() != "event":
+        return []
+
+    required_ids: list[str] = []
+    for market in roster.get("markets") or []:
+        if not isinstance(market, dict):
+            continue
+        market_id = str(market.get("id") or market.get("market_id") or "").strip()
+        if market_id and market_id not in required_ids:
+            required_ids.append(market_id)
+    return required_ids
+
+
+def selected_market_ids(legs: list[dict[str, Any]]) -> list[str]:
+    selected_ids: list[str] = []
+    for leg in legs:
+        market_id = str(leg.get("market_id") or "").strip()
+        if market_id and market_id not in selected_ids:
+            selected_ids.append(market_id)
+    return selected_ids
+
+
+def requires_full_bundle_execution(signal: Any, legs: list[dict[str, Any]]) -> bool:
+    if len(legs) < 2:
+        return False
+    payload = signal_payload(signal)
+    execution_plan = payload.get("execution_plan")
+    execution_plan = execution_plan if isinstance(execution_plan, dict) else {}
+    metadata = execution_plan.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    market_coverage = metadata.get("market_coverage")
+    market_coverage = market_coverage if isinstance(market_coverage, dict) else {}
+    # Generic atomic-bundle signals (replacing the per-strategy slug hardcode):
+    #   * a strategy that declares requires_atomic_execution, or
+    #   * a guaranteed event-internal arb (requires_full_market_coverage).
+    if bool(metadata.get("requires_atomic_bundle")):
+        return True
+    if bool(market_coverage.get("requires_full_market_coverage")):
+        return True
+    if not bool(payload.get("is_guaranteed")):
+        return False
+    if len(selected_market_ids(legs)) == 1:
+        return True
+    roster = payload.get("market_roster")
+    if isinstance(roster, dict) and str(roster.get("scope") or "").strip().lower() == "event":
+        return len(required_roster_market_ids(signal)) > 1
+    return False
+
+
+def bundle_minimum_executable_notional_usd(
+    legs: list[dict[str, Any]],
+    *,
+    min_order_size_usd: float,
+    min_shares: float = MIN_BUNDLE_EXECUTION_SHARES,
+) -> float | None:
+    """Smallest total bundle notional at which every leg clears the venue
+    minimums (``min_shares`` shares and ``min_order_size_usd`` notional),
+    under the same weight allocation as :func:`allocate_leg_notionals`.
+
+    Returns ``None`` when the minimum cannot be derived (no legs, or a leg
+    without a positive limit price) — callers must then leave sizing alone
+    and let the execution-side preflight decide.
+    """
+    if not legs:
+        return None
+
+    weights: list[float] = [
+        max(0.0001, safe_float(leg.get("notional_weight"), 1.0)) for leg in legs
+    ]
+    total_weight = sum(weights)
+    if total_weight <= 0:
+        return None
+
+    min_order = max(0.0, safe_float(min_order_size_usd, 0.0))
+    floor_shares = max(0.0, safe_float(min_shares, 0.0))
+    minimum_total = 0.0
+    for leg, weight in zip(legs, weights):
+        limit_price = safe_float(leg.get("limit_price"), 0.0)
+        if limit_price <= 0.0:
+            return None
+        # notional_i = S * w_i / W  and  shares_i = notional_i / p_i
+        if min_order > 0.0:
+            minimum_total = max(minimum_total, min_order * total_weight / weight)
+        if floor_shares > 0.0:
+            minimum_total = max(
+                minimum_total, floor_shares * limit_price * total_weight / weight
+            )
+    return minimum_total if minimum_total > 0.0 else None
+
 
 def normalize_execution_policy(value: Any, *, legs_count: int) -> str:
     policy = str(value or "").strip().upper()

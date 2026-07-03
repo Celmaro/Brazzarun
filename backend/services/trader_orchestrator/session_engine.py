@@ -19,12 +19,17 @@ from services.strategy_sdk import StrategySDK
 from services.strategy_loader import strategy_loader
 from services.trader_order_verification import apply_trader_order_verification, derive_trader_order_verification
 from services.trader_orchestrator.execution_policies import (
+    MIN_BUNDLE_EXECUTION_SHARES,
     allocate_leg_notionals,
     execution_waves,
     normalize_execution_constraints,
     normalize_execution_policy,
     reprice_limit_price,
     requires_pair_lock,
+    required_roster_market_ids as _required_roster_market_ids,
+    requires_full_bundle_execution as _requires_full_bundle_execution,
+    selected_market_ids as _selected_market_ids,
+    signal_payload as _signal_payload,
     supports_reprice,
 )
 from services.trader_orchestrator.gate_pipeline import (
@@ -78,7 +83,6 @@ import services.trader_hot_state as hot_state
 logger = get_logger(__name__)
 
 
-_MIN_BUNDLE_EXECUTION_SHARES = 5.0
 _PRE_SUBMIT_ORDER_STATUS = "placing"
 _STALE_PRE_SUBMIT_SESSION_TIMEOUT_SECONDS = 45.0
 _LIVE_PRE_SUBMIT_AUTHORITY_RECOVERY_MAX_AGE_SECONDS = 900.0
@@ -255,66 +259,6 @@ def _execution_profile_for_signal(
     }
 
 
-def _signal_payload(signal: Any) -> dict[str, Any]:
-    payload = getattr(signal, "payload_json", None)
-    return payload if isinstance(payload, dict) else {}
-
-
-def _requires_full_bundle_execution(signal: Any, legs: list[dict[str, Any]]) -> bool:
-    if len(legs) < 2:
-        return False
-    payload = _signal_payload(signal)
-    execution_plan = payload.get("execution_plan")
-    execution_plan = execution_plan if isinstance(execution_plan, dict) else {}
-    metadata = execution_plan.get("metadata")
-    metadata = metadata if isinstance(metadata, dict) else {}
-    market_coverage = metadata.get("market_coverage")
-    market_coverage = market_coverage if isinstance(market_coverage, dict) else {}
-    # Generic atomic-bundle signals (replacing the per-strategy slug hardcode):
-    #   * a strategy that declares requires_atomic_execution, or
-    #   * a guaranteed event-internal arb (requires_full_market_coverage).
-    if bool(metadata.get("requires_atomic_bundle")):
-        return True
-    if bool(market_coverage.get("requires_full_market_coverage")):
-        return True
-    if not bool(payload.get("is_guaranteed")):
-        return False
-    selected_market_ids = _selected_market_ids(legs)
-    if len(selected_market_ids) == 1:
-        return True
-    roster = payload.get("market_roster")
-    if isinstance(roster, dict) and str(roster.get("scope") or "").strip().lower() == "event":
-        return len(_required_roster_market_ids(signal)) > 1
-    return False
-
-
-def _required_roster_market_ids(signal: Any) -> list[str]:
-    payload = _signal_payload(signal)
-    roster = payload.get("market_roster")
-    if not isinstance(roster, dict):
-        return []
-    if str(roster.get("scope") or "").strip().lower() != "event":
-        return []
-
-    required_ids: list[str] = []
-    for market in roster.get("markets") or []:
-        if not isinstance(market, dict):
-            continue
-        market_id = str(market.get("id") or market.get("market_id") or "").strip()
-        if market_id and market_id not in required_ids:
-            required_ids.append(market_id)
-    return required_ids
-
-
-def _selected_market_ids(legs: list[dict[str, Any]]) -> list[str]:
-    selected_ids: list[str] = []
-    for leg in legs:
-        market_id = str(leg.get("market_id") or "").strip()
-        if market_id and market_id not in selected_ids:
-            selected_ids.append(market_id)
-    return selected_ids
-
-
 def _normalize_plan_leg_sides(payload: dict[str, Any], legs: list[dict[str, Any]]) -> None:
     positions = payload.get("positions_to_take") if isinstance(payload.get("positions_to_take"), list) else []
     for index, leg in enumerate(legs):
@@ -444,8 +388,8 @@ def _bundle_preflight_violation(
             }
 
         leg_scale_required = 1.0
-        if requested_shares < _MIN_BUNDLE_EXECUTION_SHARES:
-            leg_scale_required = max(leg_scale_required, _MIN_BUNDLE_EXECUTION_SHARES / requested_shares)
+        if requested_shares < MIN_BUNDLE_EXECUTION_SHARES:
+            leg_scale_required = max(leg_scale_required, MIN_BUNDLE_EXECUTION_SHARES / requested_shares)
         if requested_notional < min_order_size_usd:
             leg_scale_required = max(leg_scale_required, min_order_size_usd / requested_notional)
         if leg_scale_required > 1.0 + 1e-9:
@@ -457,7 +401,7 @@ def _bundle_preflight_violation(
                     "requested_notional_usd": requested_notional,
                     "requested_shares": requested_shares,
                     "minimum_notional_usd": float(min_order_size_usd),
-                    "minimum_shares": float(_MIN_BUNDLE_EXECUTION_SHARES),
+                    "minimum_shares": float(MIN_BUNDLE_EXECUTION_SHARES),
                     "required_scale": float(leg_scale_required),
                 }
             )

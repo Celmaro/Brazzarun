@@ -1599,3 +1599,120 @@ def test_market_data_freshness_uses_risk_limits_fallback_for_staleness_budget():
     assert freshness_gate["status"] == "passed"
     assert freshness_gate["payload"]["max_age_ms"] == 20000
 
+
+
+def _full_bundle_payload():
+    return {
+        "is_guaranteed": True,
+        "execution_plan": {
+            "legs": [
+                {
+                    "leg_id": "buy_yes_leg",
+                    "market_id": "market-1",
+                    "side": "buy",
+                    "limit_price": 0.83,
+                    "notional_weight": 0.83,
+                },
+                {
+                    "leg_id": "buy_no_leg",
+                    "market_id": "market-1",
+                    "side": "buy",
+                    "limit_price": 0.019,
+                    "notional_weight": 0.019,
+                },
+                {
+                    "leg_id": "merge_leg",
+                    "market_id": "market-1",
+                    "side": "buy",
+                    "limit_price": 1.0,
+                    "notional_weight": 1.0,
+                },
+            ],
+            "metadata": {"market_coverage": {"requires_full_market_coverage": False}},
+        },
+    }
+
+
+def test_bundle_min_executable_scales_size_up_within_trade_cap():
+    result = apply_platform_decision_gates(
+        decision_obj=_decision(40.0),
+        runtime_signal=_runtime_signal(payload_json=_full_bundle_payload()),
+        strategy=None,
+        checks_payload=[],
+        trading_schedule_ok=True,
+        trading_schedule_config={},
+        global_limits={"max_gross_exposure_usd": 5000.0},
+        effective_risk_limits={"max_trade_notional_usd": 200.0},
+        allow_averaging=True,
+        occupied_market_ids=set(),
+        portfolio_allocator=None,
+        risk_evaluator=_risk_evaluator,
+        invoke_hooks=False,
+    )
+
+    assert result["final_decision"] == "selected"
+    # Minimum: the 1.9c leg needs $1 notional -> total weight 1.849 / 0.019.
+    assert result["size_usd"] > 97.0
+    assert result["size_usd"] < 98.0
+    scale_gate = next(g for g in result["platform_gates"] if g["gate"] == "bundle_min_executable")
+    assert scale_gate["status"] == "scaled"
+    assert scale_gate["payload"]["original_size_usd"] == 40.0
+
+
+def test_bundle_min_executable_blocks_when_minimum_exceeds_trade_cap():
+    result = apply_platform_decision_gates(
+        decision_obj=_decision(5.0),
+        runtime_signal=_runtime_signal(payload_json=_full_bundle_payload()),
+        strategy=None,
+        checks_payload=[],
+        trading_schedule_ok=True,
+        trading_schedule_config={},
+        global_limits={"max_gross_exposure_usd": 5000.0},
+        effective_risk_limits={"max_trade_notional_usd": 60.0},
+        allow_averaging=True,
+        occupied_market_ids=set(),
+        portfolio_allocator=None,
+        risk_evaluator=_risk_evaluator,
+        invoke_hooks=False,
+    )
+
+    assert result["final_decision"] == "blocked"
+    assert "Bundle minimum executable size" in result["final_reason"]
+    block_gate = next(g for g in result["platform_gates"] if g["gate"] == "bundle_min_executable")
+    assert block_gate["status"] == "blocked"
+
+
+def test_bundle_min_executable_ignores_single_leg_signals():
+    payload = {
+        "is_guaranteed": True,
+        "execution_plan": {
+            "legs": [
+                {
+                    "leg_id": "only_leg",
+                    "market_id": "market-1",
+                    "side": "buy",
+                    "limit_price": 0.02,
+                    "notional_weight": 1.0,
+                }
+            ],
+        },
+    }
+    result = apply_platform_decision_gates(
+        decision_obj=_decision(3.0),
+        runtime_signal=_runtime_signal(payload_json=payload),
+        strategy=None,
+        checks_payload=[],
+        trading_schedule_ok=True,
+        trading_schedule_config={},
+        global_limits={"max_gross_exposure_usd": 5000.0},
+        effective_risk_limits={"max_trade_notional_usd": 60.0},
+        allow_averaging=True,
+        occupied_market_ids=set(),
+        portfolio_allocator=None,
+        risk_evaluator=_risk_evaluator,
+        invoke_hooks=False,
+    )
+
+    assert result["final_decision"] == "selected"
+    assert result["size_usd"] == 3.0
+    assert not any(g["gate"] == "bundle_min_executable" for g in result["platform_gates"])

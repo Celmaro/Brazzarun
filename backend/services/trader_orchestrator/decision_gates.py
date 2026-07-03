@@ -12,6 +12,10 @@ from services.trader_orchestrator.gate_pipeline import (
     GateContext,
     GatePipeline,
 )
+from services.trader_orchestrator.execution_policies import (
+    bundle_minimum_executable_notional_usd,
+    requires_full_bundle_execution,
+)
 from services.trader_orchestrator.platform_gates import (
     GATE_NAME_SIGNAL_STALENESS,
     GATE_NAME_STRATEGY_DEMOTED,
@@ -864,6 +868,77 @@ def apply_platform_decision_gates(
                 "detail": f"Skipped because decision is '{final_decision}'",
             }
         )
+
+    # Full-bundle signals (CTF split/merge, guaranteed event arbs) have a
+    # venue-imposed minimum executable size: every leg must clear the CLOB
+    # share floor and min order notional or the session preflight rejects
+    # the whole bundle.  Scale the size up to that minimum while it still
+    # fits under max_trade_notional_usd (the downstream risk evaluator and
+    # portfolio allocator re-check the scaled size); block early with the
+    # exact numbers when it cannot fit, instead of burning a doomed session.
+    if final_decision == "selected" and live_execution_gates_enabled:
+        bundle_plan, _bundle_payload = _runtime_signal_execution_plan(runtime_signal)
+        raw_bundle_legs = bundle_plan.get("legs")
+        bundle_legs = (
+            [leg for leg in raw_bundle_legs if isinstance(leg, dict)]
+            if isinstance(raw_bundle_legs, list)
+            else []
+        )
+        if bundle_legs and requires_full_bundle_execution(runtime_signal, bundle_legs):
+            bundle_minimum = bundle_minimum_executable_notional_usd(
+                bundle_legs,
+                min_order_size_usd=StrategySDK.resolve_min_order_size_usd(
+                    params, mode=execution_mode, fallback=1.0
+                ),
+            )
+            if bundle_minimum is not None and size_usd + 1e-9 < bundle_minimum:
+                if bundle_minimum <= max_trade_notional + 1e-9:
+                    original_size = size_usd
+                    size_usd = float(bundle_minimum)
+                    platform_gates.append(
+                        {
+                            "gate": "bundle_min_executable",
+                            "status": "scaled",
+                            "detail": (
+                                f"Scaled bundle size {original_size:.2f} -> {size_usd:.2f} "
+                                f"to clear venue leg minimums"
+                            ),
+                            "payload": {
+                                "original_size_usd": original_size,
+                                "scaled_size_usd": size_usd,
+                                "minimum_total_notional_usd": float(bundle_minimum),
+                                "max_trade_notional_usd": float(max_trade_notional),
+                            },
+                        }
+                    )
+                else:
+                    final_decision = "blocked"
+                    final_reason = (
+                        "Bundle minimum executable size "
+                        f"${bundle_minimum:.2f} exceeds max_trade_notional_usd "
+                        f"${max_trade_notional:.2f}"
+                    )
+                    platform_gates.append(
+                        {
+                            "gate": "bundle_min_executable",
+                            "status": "blocked",
+                            "detail": final_reason,
+                            "payload": {
+                                "size_usd": float(size_usd),
+                                "minimum_total_notional_usd": float(bundle_minimum),
+                                "max_trade_notional_usd": float(max_trade_notional),
+                            },
+                        }
+                    )
+                    if invoke_hooks and strategy is not None and hasattr(strategy, "on_blocked"):
+                        strategy.on_blocked(
+                            runtime_signal,
+                            BlockReason.RISK_TRADE_NOTIONAL,
+                            {
+                                "minimum_total_notional_usd": float(bundle_minimum),
+                                "max_trade_notional_usd": float(max_trade_notional),
+                            },
+                        )
 
     if final_decision == "selected":
         execution_plan, execution_payload = _runtime_signal_execution_plan(runtime_signal)
