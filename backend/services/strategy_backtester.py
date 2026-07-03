@@ -2130,9 +2130,11 @@ class _SyntheticOpp:
     downstream code can downweight if needed.
     """
 
-    __slots__ = ("id", "stable_id", "strategy", "strategy_type",
-                 "detected_at", "positions_data",
-                 "title", "event_id", "_synthetic")
+    __slots__ = (
+        "id", "stable_id", "strategy", "strategy_type",
+        "detected_at", "positions_data", "expected_roi", "risk_score",
+        "title", "event_id", "_synthetic",
+    )
 
     # Class-level sequence counter so multiple opps emitted at the SAME
     # tick on the SAME market (e.g. UP + DOWN sides of a binary, or
@@ -2160,6 +2162,8 @@ class _SyntheticOpp:
         self.strategy = strategy_type
         self.detected_at = detected_at
         self.positions_data = positions_data
+        self.expected_roi = float(positions_data.get("expected_roi", 0.0) or 0.0)
+        self.risk_score = float(positions_data.get("risk_score", 0.0) or 0.0)
         self.title = title
         self.event_id = event_id
         self._synthetic = True
@@ -4041,6 +4045,16 @@ def _opp_to_positions_data(opp: Any) -> dict[str, Any]:
       * Bare list of position dicts
       * Single position dict
     """
+    def _first_numeric(*values: Any) -> float:
+        for value in values:
+            try:
+                if value is None:
+                    continue
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+        return 0.0
+
     if isinstance(opp, dict):
         pdata = dict(opp)
         if "positions_to_take" not in pdata:
@@ -4048,6 +4062,13 @@ def _opp_to_positions_data(opp: Any) -> dict[str, Any]:
             if any(k in pdata for k in ("token_id", "side", "action")):
                 return {"positions_to_take": [pdata]}
             return {}
+        edge = _first_numeric(
+            pdata.get("edge_percent"),
+            pdata.get("expected_roi"),
+            pdata.get("roi_percent"),
+        )
+        pdata.setdefault("expected_roi", edge)
+        pdata.setdefault("edge_percent", edge)
         return pdata
     pos_list = getattr(opp, "positions_to_take", None)
     if isinstance(pos_list, list):
@@ -4063,9 +4084,26 @@ def _opp_to_positions_data(opp: Any) -> dict[str, Any]:
         pdata: dict[str, Any] = {
             "positions_to_take": out,
             "total_cost": float(getattr(opp, "total_cost", 0.0) or 0.0),
-            "expected_roi": float(getattr(opp, "expected_roi", 0.0) or 0.0),
+            "expected_roi": _first_numeric(
+                getattr(opp, "edge_percent", None),
+                getattr(opp, "expected_roi", None),
+                getattr(opp, "roi_percent", None),
+            ),
             "risk_score": float(getattr(opp, "risk_score", 0.0) or 0.0),
         }
+        pdata["edge_percent"] = pdata["expected_roi"]
+        roi_percent = getattr(opp, "roi_percent", None)
+        if roi_percent is not None:
+            pdata["roi_percent"] = float(roi_percent)
+        confidence = getattr(opp, "confidence", None)
+        if confidence is not None:
+            pdata["confidence"] = float(confidence)
+        markets = getattr(opp, "markets", None)
+        if isinstance(markets, list) and markets:
+            pdata["markets"] = [
+                m.model_dump() if hasattr(m, "model_dump") else dict(m) if isinstance(m, dict) else m
+                for m in markets
+            ]
         # Carry the strategy_context through the synthetic wrapper.  Live,
         # the intent runtime projects it into trade_signals.payload_json and
         # the platform gates read source/timeframe out of it

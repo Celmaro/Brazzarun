@@ -71,6 +71,11 @@ _SPORTS_KEYWORDS = [
     "champions league", "europa league", "copa ", "primera division",
     " sc ", " afc ", "real madrid", "psg", "monaco", "tottenham",
     "crystal palace", "hull city", "holstein",
+    "fifwc", "fifa world cup", "world cup", "world-cup", "player-props",
+    "player props", "halftime", "half-time", "second half",
+    "leading at halftime", "to win the second half",
+    "1+ goals", "2+ goals", "3+ goals", "1+ assists", "2+ assists",
+    "3+ assists",
 ]
 
 _ESPORTS_KEYWORDS = [
@@ -570,11 +575,24 @@ class TailEndCarryStrategy(BaseStrategy):
     _SPREAD_PATTERNS = re.compile(
         r"(?:^|\b)spread\s*:", re.IGNORECASE,
     )
+    _SPORTS_PROP_PATTERNS = re.compile(
+        r"(?:\b\d+\+\s+(?:goals?|assists?|shots?|saves?|points?|rebounds?|touchdowns?|hits?|strikeouts?)\b"
+        r"|anytime\s+scorer|to\s+score\b|player[-\s]?props"
+        r"|(?:goals?|assists?)-[a-z0-9-]+-gte\d+)",
+        re.IGNORECASE,
+    )
 
     @classmethod
     def _is_spread_market(cls, text: str) -> bool:
         """Detect spread-type sports markets (e.g. 'Spread: Team X (-1.5)')."""
         return cls._SPREAD_PATTERNS.search(text) is not None
+
+    @classmethod
+    def _is_sports_prop_market(cls, text: str, sports_market_type: Any) -> bool:
+        sports_type = str(sports_market_type or "").strip().lower()
+        if sports_type == "props":
+            return True
+        return cls._SPORTS_PROP_PATTERNS.search(text or "") is not None
 
     # ------------------------------------------------------------------
     # Live game detection (Fix #3)
@@ -879,9 +897,10 @@ class TailEndCarryStrategy(BaseStrategy):
                     or self._is_spread_market(market_text)
                 )
             )
-            # Discrete-event player prop (intra-window jump risk) — structural,
-            # via Gamma's sports_market_type, not keyword matching.
-            is_sports_prop = bool(block_sports_props and sports_type == "props")
+            is_sports_prop = bool(
+                block_sports_props
+                and self._is_sports_prop_market(market_text, sports_type)
+            )
             liquidity = safe_float(getattr(market, "liquidity", 0.0))
             liquidity_ok = liquidity >= min_liquidity
             live_game_detected = bool(
@@ -1164,7 +1183,7 @@ class TailEndCarryStrategy(BaseStrategy):
                 if isinstance(markets_list, list) and markets_list:
                     m0 = markets_list[0] if isinstance(markets_list[0], dict) else {}
                     sports_type = m0.get("sports_market_type")
-            is_sports_prop = sports_type == "props"
+            is_sports_prop = self._is_sports_prop_market(signal_text, sports_type)
 
         checks = self._tail_end_checks(
             source=source,

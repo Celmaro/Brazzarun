@@ -153,6 +153,46 @@ def _make_event(market: Market) -> Event:
     )
 
 
+def test_opp_to_positions_data_preserves_detected_opportunity_edge_and_context():
+    detected_opp = SimpleNamespace(
+        positions_to_take=[
+            {"action": "BUY", "token_id": "yes_tok", "price": 0.83, "size": 4.0}
+        ],
+        total_cost=3.32,
+        roi_percent=7.5,
+        risk_score=0.21,
+        confidence=0.64,
+        markets=[{"id": "m1", "question": "Will unit test pass?"}],
+        strategy_context={"source": "unit"},
+    )
+
+    positions_data = strategy_backtester._opp_to_positions_data(detected_opp)
+
+    assert positions_data["positions_to_take"] == detected_opp.positions_to_take
+    assert positions_data["total_cost"] == pytest.approx(3.32)
+    assert positions_data["expected_roi"] == pytest.approx(7.5)
+    assert positions_data["edge_percent"] == pytest.approx(7.5)
+    assert positions_data["risk_score"] == pytest.approx(0.21)
+    assert positions_data["confidence"] == pytest.approx(0.64)
+    assert positions_data["markets"] == [{"id": "m1", "question": "Will unit test pass?"}]
+    assert positions_data["strategy_context"] == {"source": "unit"}
+
+
+def test_opp_to_positions_data_prefers_explicit_edge_in_dict_payload():
+    positions_data = strategy_backtester._opp_to_positions_data(
+        {
+            "positions_to_take": [
+                {"action": "BUY", "token_id": "yes_tok", "price": 0.83}
+            ],
+            "roi_percent": 3.0,
+            "edge_percent": 4.25,
+        }
+    )
+
+    assert positions_data["expected_roi"] == pytest.approx(4.25)
+    assert positions_data["edge_percent"] == pytest.approx(4.25)
+
+
 def _patch_common(monkeypatch, strategy_instance: BaseStrategy, market: Market, event: Event) -> None:
     monkeypatch.setattr(
         strategy_backtester,
