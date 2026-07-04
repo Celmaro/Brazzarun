@@ -29,7 +29,6 @@ from services.trader_orchestrator.execution_policies import (
     required_roster_market_ids as _required_roster_market_ids,
     requires_full_bundle_execution as _requires_full_bundle_execution,
     selected_market_ids as _selected_market_ids,
-    signal_payload as _signal_payload,
     supports_reprice,
 )
 from services.trader_orchestrator.gate_pipeline import (
