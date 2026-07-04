@@ -84,6 +84,9 @@ logger = get_logger(__name__)
 
 
 _PRE_SUBMIT_ORDER_STATUS = "placing"
+# Residual (naked/unmerged) fills from atomic full-bundle sessions are
+# force-exited by the live exit engine after this many minutes.
+_FULL_BUNDLE_RESIDUAL_MAX_HOLD_MINUTES = 2.0
 _STALE_PRE_SUBMIT_SESSION_TIMEOUT_SECONDS = 45.0
 _LIVE_PRE_SUBMIT_AUTHORITY_RECOVERY_MAX_AGE_SECONDS = 900.0
 _STALE_SESSION_PROVIDER_IO_SKIP_SECONDS = 3600.0
@@ -2148,6 +2151,19 @@ class ExecutionSessionEngine:
                     live_market["live_selected_price"] = float(live_selected_price)
                 if live_market:
                     order_payload["live_market"] = live_market
+                if bool((plan.get("metadata") or {}).get("full_bundle_execution_required")):
+                    # Atomic-bundle legs must never be warehoused as naked
+                    # positions. A residual fill (partial bundle, or a fill
+                    # discovered by provider reconciliation AFTER the
+                    # session already failed — the 2026-07-03 Valorant
+                    # loss) is force-flattened by the live exit engine via
+                    # a short max-hold. A completed merge/split leaves no
+                    # position behind, so this only ever fires on residue.
+                    exit_config = dict(exit_config)
+                    existing_hold = safe_float(exit_config.get("max_hold_minutes"), None)
+                    if existing_hold is None or existing_hold > _FULL_BUNDLE_RESIDUAL_MAX_HOLD_MINUTES:
+                        exit_config["max_hold_minutes"] = _FULL_BUNDLE_RESIDUAL_MAX_HOLD_MINUTES
+                    exit_config["resolve_only"] = False
                 order_payload["strategy_exit_config"] = exit_config
                 placeholder_pair = entry_submit_placeholders.get(leg_id)
                 if normalized_status != "skipped" or placeholder_pair is not None:

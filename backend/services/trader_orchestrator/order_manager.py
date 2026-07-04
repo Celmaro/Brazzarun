@@ -448,17 +448,23 @@ def _check_slippage_bps(
     signal_price: float | None,
     intended_price: float | None,
     risk_limits: dict[str, Any] | None,
+    side: str = "buy",
 ) -> tuple[bool, float | None, float | None]:
     """Returns (rejected, drift_bps, configured_cap_bps).
 
-    Compares intended fill price against signal.entry_price symmetrically.
-    Captures the "market moved between gate-time and submit-time and the
-    move exceeded my tolerance" case — distinct from max_entry_drift_pct
-    which fires at gate-time against live mid in percent.
+    Compares intended fill price against the reference price
+    DIRECTIONALLY: only an adverse move counts as slippage (buy filling
+    higher, sell filling lower). A favorable move is never rejected —
+    the old symmetric check rejected a hedge leg whose price had moved
+    IN OUR FAVOR, stranding the filled primary leg naked (2026-07-03
+    Valorant loss). Captures the "market moved between gate-time and
+    submit-time beyond my tolerance" case — distinct from
+    max_entry_drift_pct which fires at gate-time against live mid in
+    percent.
 
     Rejected only when configured cap > 0 AND both prices are positive AND
-    the absolute drift exceeds the cap. Signal-emitted strategies that
-    don't carry an entry_price → no-op (we can't measure drift).
+    the adverse drift exceeds the cap. Signal-emitted strategies that
+    don't carry a reference price → no-op (we can't measure drift).
     """
     if not isinstance(risk_limits, dict):
         return False, None, None
@@ -475,7 +481,11 @@ def _check_slippage_bps(
         return False, None, cap
     if intended_price is None or intended_price <= 0.0:
         return False, None, cap
-    drift_bps = abs(intended_price - signal_price) / signal_price * 10_000.0
+    if str(side or "buy").strip().lower() == "sell":
+        adverse = signal_price - intended_price
+    else:
+        adverse = intended_price - signal_price
+    drift_bps = max(0.0, adverse) / signal_price * 10_000.0
     return (drift_bps > cap), drift_bps, cap
 
 
@@ -838,12 +848,21 @@ async def submit_execution_leg(
     # Distinct from max_entry_drift_pct: this fires at submit-time against
     # the intended fill price (which may have drifted from the signal via
     # chase-up, limit-policy resolution, etc.), in bps for finer precision.
-    # No-op when knob unset/zero or signal carries no entry_price.
-    _signal_entry_price = safe_float(getattr(signal, "entry_price", None), None)
+    # Reference is the LEG's own planned limit price when it carries one —
+    # multi-leg bundles price each leg differently, and comparing a hedge
+    # leg against the signal-level entry_price (the primary leg's price)
+    # falsely rejects every hedge leg and strands the filled primary
+    # naked (2026-07-03 Valorant loss). Signal entry_price remains the
+    # fallback for single-leg signals without a planned leg price.
+    # No-op when knob unset/zero or no reference price is available.
+    _slip_reference_price = safe_float(leg.get("limit_price"), None)
+    if _slip_reference_price is None or _slip_reference_price <= 0.0:
+        _slip_reference_price = safe_float(getattr(signal, "entry_price", None), None)
     _slip_rejected, _slip_drift_bps, _slip_cap = _check_slippage_bps(
-        signal_price=_signal_entry_price,
+        signal_price=_slip_reference_price,
         intended_price=price,
         risk_limits=risk_limits,
+        side=str(leg.get("side") or "buy"),
     )
     if _slip_rejected:
         return LegSubmitResult(
@@ -852,7 +871,7 @@ async def submit_execution_leg(
             effective_price=price,
             error_message=(
                 f"Intended price {price:.4f} drifted {_slip_drift_bps:.1f} bps from "
-                f"signal entry {_signal_entry_price:.4f} (cap {_slip_cap:.1f} bps)."
+                f"leg reference {_slip_reference_price:.4f} (cap {_slip_cap:.1f} bps)."
             ),
             payload={
                 "mode": mode_key,
@@ -860,7 +879,7 @@ async def submit_execution_leg(
                 "reason": "slippage_bps_exceeded",
                 "drift_bps": round(float(_slip_drift_bps), 2),
                 "slippage_bps": float(_slip_cap),
-                "signal_entry_price": float(_signal_entry_price),
+                "reference_price": float(_slip_reference_price),
                 "intended_price": float(price),
                 "leg": dict(leg),
                 "requested_notional_usd": notional,
