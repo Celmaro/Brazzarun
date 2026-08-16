@@ -156,7 +156,7 @@ Automatically installs Python venv, npm deps, and Postgres on first run. No manu
 ### Shell launch
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/braedonsaunders/homerun.git
 cd homerun
 ./scripts/infra/run.sh
 ```
@@ -179,7 +179,7 @@ WebSocket:     ws://localhost:8000/ws
 For running Homerun on a server, NAS, or VPS where the desktop launcher's tkinter window isn't useful. The one-click launchers above are still the recommended path for desktop use.
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/braedonsaunders/homerun.git
 cd homerun
 cp .env.example .env       # edit APP_SECRETS_KEY at minimum
 docker compose up -d
