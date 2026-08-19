@@ -985,6 +985,17 @@ async def lifespan(app: FastAPI):
         # Start validation orchestration (async job queue + guardrails)
         await validation_service.start()
 
+        # Consolidate all worker planes inside this process to save ~1 GB
+        # of per-container OS overhead on the 2 GB Zeabur server.
+        worker_hosts: dict = {}
+        try:
+            from workers.consolidate import start_planes
+
+            worker_hosts = await start_planes(["trading", "news", "discovery"])
+            logger.info("Worker planes started in-process", planes=list(worker_hosts.keys()))
+        except Exception:
+            logger.exception("Worker plane startup failed — continuing without worker planes")
+
         logger.info("All services started successfully")
 
         yield
@@ -996,6 +1007,14 @@ async def lifespan(app: FastAPI):
     finally:
         # Cleanup
         logger.info("Shutting down...")
+
+        if worker_hosts:
+            try:
+                from workers.consolidate import stop_planes
+
+                await stop_planes(worker_hosts)
+            except Exception:
+                pass
 
         if _feed_manager_started:
             try:
