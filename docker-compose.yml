@@ -61,15 +61,15 @@ services:
     command:
       - postgres
       - -c
-      - max_connections=200
+      - max_connections=100
       - -c
-      - shared_buffers=4GB
+      - shared_buffers=256MB
       - -c
-      - effective_cache_size=10GB
+      - effective_cache_size=512MB
       - -c
-      - work_mem=32MB
+      - work_mem=8MB
       - -c
-      - maintenance_work_mem=1GB
+      - maintenance_work_mem=128MB
       - -c
       - synchronous_commit=off
       # 2026-05-10: WAL/bgwriter tuning to address backend commit stalls
@@ -176,7 +176,7 @@ services:
       - --appendonly
       - "no"
       - --maxmemory
-      - "1gb"
+      - "128mb"
       - --maxmemory-policy
       - "volatile-lru"
       - --slowlog-log-slower-than

@@ -208,7 +208,7 @@ def _is_transient_db_error(exc: Exception) -> bool:
     msg = str(getattr(exc, "orig", exc)).lower()
     return any(marker in msg for marker in _SIGNAL_TRANSIENT_ERROR_MARKERS)
 
-_STRATEGY_EVAL_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="strategy-eval")
+_STRATEGY_EVAL_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="strategy-eval")
 _abandoned_trader_cycle_tasks: set[asyncio.Task] = set()
 _inflight_trader_cycle_tasks: dict[str, set[asyncio.Task]] = {}
 # Per-task metadata (start_time + process_signals flag).  Keyed by Task

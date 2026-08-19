@@ -235,20 +235,9 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = _default_database_url()
     DATABASE_POOL_SIZE: int = 20
-    DATABASE_MAX_OVERFLOW: int = 10
-    # SOAK-2026-05-18: tried bumping worker pool 80→120, overflow
-    # 10→20 against ``_persist_orders pool_wait p95=3328ms`` from the
-    # 21:10 soak.  Did NOT help — the next soak (03:06-03:21) still
-    # showed pool_wait spikes of 2125-3438ms.  Root cause is NOT
-    # slot count: every checked-out session is held 2-4s waiting on
-    # postgres to respond (the same soak captured ``SET LOCAL
-    # lock_timeout`` taking 687ms and ``commit_ms=3500 dirty_rows=0``
-    # with ``synchronous_commit=off`` globally enabled — pure
-    # backend-response latency, below the WAL/fsync layer).  Adding
-    # more pool slots just queues more concurrent slow round-trips
-    # without raising throughput.  Reverted to the prior values.
-    DATABASE_WORKER_POOL_SIZE: int = 80
-    DATABASE_WORKER_MAX_OVERFLOW: int = 10
+    DATABASE_MAX_OVERFLOW: int = 4
+    DATABASE_WORKER_POOL_SIZE: int = 30
+    DATABASE_WORKER_MAX_OVERFLOW: int = 4
     DATABASE_POOL_TIMEOUT_SECONDS: int = 30
     DATABASE_POOL_RECYCLE_SECONDS: int = 300
     DATABASE_CONNECT_TIMEOUT_SECONDS: float = 8.0
