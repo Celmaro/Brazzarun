@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1.7
 #
+# Brazzarun backend — consolidated API + worker planes (2026-08-20)
+# Workers now run in-process via workers.consolidate.start_planes()
+#
 # Homerun backend image — used for the API, all worker planes, and the
 # one-shot Alembic migration container.  The compose file overrides the
 # CMD per service.
