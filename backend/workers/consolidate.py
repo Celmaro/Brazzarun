@@ -20,7 +20,7 @@ from workers.host import WorkerHost
 
 logger = __import__("utils.logging").get_logger(__name__)
 
-WORKER_PLANES = ["trading", "news", "discovery"]
+WORKER_PLANES = ["trading"]  # news/discovery disabled: torch/sentence_transformers ~1.5GB
 
 
 async def start_planes(planes: list[str] | None = None) -> dict[str, WorkerHost]:

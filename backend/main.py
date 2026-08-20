@@ -312,9 +312,12 @@ async def lifespan(app: FastAPI):
 
     loop.set_exception_handler(_global_exception_handler)
 
+    import resource
+    rss_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     logger.info(
         "Thread pool executor configured",
         max_workers=8,
+        rss_mb_after_pool=rss_kb / 1024,
     )
     tasks: list[asyncio.Task] = []
     _feed_manager_started = False
@@ -989,14 +992,16 @@ async def lifespan(app: FastAPI):
         # of per-container OS overhead on the 2 GB Zeabur server.
         worker_hosts: dict = {}
         try:
-            from workers.consolidate import start_planes
+            from workers.consolidate import start_planes, WORKER_PLANES
 
-            worker_hosts = await start_planes(["trading", "news", "discovery"])
+            worker_hosts = await start_planes(WORKER_PLANES)
             logger.info("Worker planes started in-process", planes=list(worker_hosts.keys()))
         except Exception:
             logger.exception("Worker plane startup failed — continuing without worker planes")
 
         logger.info("All services started successfully")
+        rss_end = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        logger.info("Startup memory snapshot", rss_mb=rss_end / 1024)
 
         yield
 
