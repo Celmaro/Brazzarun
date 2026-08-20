@@ -282,7 +282,7 @@ class Settings(BaseSettings):
     REDIS_CONNECT_TIMEOUT_SECONDS: float = 2.0  # Hard cap on initial connect
     REDIS_SOCKET_TIMEOUT_SECONDS: float = 1.5  # Per-op timeout for individual commands
     REDIS_HEALTH_CHECK_INTERVAL_SECONDS: float = 15.0  # Pool-level liveness ping cadence
-    REDIS_MAX_CONNECTIONS: int = 64  # Pool ceiling — enough for 4 worker procs × ~16 streams
+    REDIS_MAX_CONNECTIONS: int = 8  # Pool ceiling — single-process, 3 planes share
     REDIS_NAMESPACE: str = "homerun"  # Key prefix for all app keys (collision-safe + easy FLUSH)
     # Stream caps — each XADD uses MAXLEN ~ to bound memory.  These are
     # generous; the consumer groups read at producer rate so trim mostly

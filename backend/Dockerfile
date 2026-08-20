@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1.7
 #
-# Brazzarun backend — consolidated API + worker planes (2026-08-20)
+# Brazzarun backend — consolidated API + worker planes (2026-08-20 v2)
+# Memory tuned: fewer threads (4/8), tighter DB pool (10+2), Redis pool (8 conns)
 # Workers now run in-process via workers.consolidate.start_planes()
 #
 # Homerun backend image — used for the API, all worker planes, and the

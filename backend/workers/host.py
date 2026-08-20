@@ -1937,9 +1937,8 @@ class WorkerHost:
 
     async def _start_plane(self) -> None:
         loop = asyncio.get_running_loop()
-        cpu_count = os.cpu_count() or 4
         self._cpu_executor = ThreadPoolExecutor(
-            max_workers=max(cpu_count * 2 + 8, 16),
+            max_workers=4,
             thread_name_prefix=f"{self._plane_name}-cpu-pool",
         )
         loop.set_default_executor(self._cpu_executor)

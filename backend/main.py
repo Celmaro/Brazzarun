@@ -296,7 +296,7 @@ async def lifespan(app: FastAPI):
     # analysis) never block the async event loop that serves API requests.
     cpu_count = os.cpu_count() or 4
     cpu_executor = ThreadPoolExecutor(
-        max_workers=max(cpu_count * 2 + 8, 16),
+        max_workers=8,
         thread_name_prefix="cpu-pool",
     )
     loop = asyncio.get_running_loop()
@@ -314,7 +314,7 @@ async def lifespan(app: FastAPI):
 
     logger.info(
         "Thread pool executor configured",
-        max_workers=max(cpu_count * 2 + 8, 16),
+        max_workers=8,
     )
     tasks: list[asyncio.Task] = []
     _feed_manager_started = False
