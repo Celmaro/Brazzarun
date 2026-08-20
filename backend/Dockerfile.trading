@@ -2,9 +2,10 @@
 # Strips torch, sentence-transformers, faiss, sklearn, xgboost, lightgbm, lifelines
 # These ML packages are only needed for news/discovery planes, not the trading plane.
 # Estimated savings: ~1.2 GB venv size vs full image.
-# cache-bust: 2026-08-20-0750
+# cache-bust: 2026-08-20-0845z — force full venv rebuild with lean requirements
 
 ARG PYTHON_VERSION=3.12
+ARG CACHEBUST=1
 
 # ---------- builder ----------------------------------------------------------
 FROM python:${PYTHON_VERSION}-slim AS builder
@@ -26,7 +27,8 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
 
 COPY requirements-lean.txt requirements-trading.txt ./
-RUN pip install --upgrade pip wheel \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip wheel \
     && pip install -r requirements-lean.txt \
     && pip install -r requirements-trading.txt
 
@@ -38,7 +40,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/opt/venv/bin:${PATH}" \
     HOMERUN_PROCESS_ROLE=server
 
-# curl for healthchecks; libgomp1 is NOT needed here (no faiss/xgboost/lightgbm).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
         tini \
