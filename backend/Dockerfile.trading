@@ -1,0 +1,63 @@
+# Brazzarun backend — LEAN production image for trading-only deployment (2GB Zeabur)
+# Strips torch, sentence-transformers, faiss, sklearn, xgboost, lightgbm, lifelines
+# These ML packages are only needed for news/discovery planes, not the trading plane.
+# Estimated savings: ~1.2 GB venv size vs full image.
+# cache-bust: 2026-08-20-0750
+
+ARG PYTHON_VERSION=3.12
+
+# ---------- builder ----------------------------------------------------------
+FROM python:${PYTHON_VERSION}-slim AS builder
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        gcc \
+        g++ \
+        libffi-dev \
+        libssl-dev \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:${PATH}"
+
+COPY requirements-lean.txt requirements-trading.txt ./
+RUN pip install --upgrade pip wheel \
+    && pip install -r requirements-lean.txt \
+    && pip install -r requirements-trading.txt
+
+# ---------- runtime ----------------------------------------------------------
+FROM python:${PYTHON_VERSION}-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:${PATH}" \
+    HOMERUN_PROCESS_ROLE=server
+
+# curl for healthchecks; libgomp1 is NOT needed here (no faiss/xgboost/lightgbm).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl \
+        tini \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --system --gid 1000 homerun \
+    && useradd  --system --uid 1000 --gid 1000 --create-home --shell /bin/bash homerun
+
+COPY --from=builder /opt/venv /opt/venv
+
+WORKDIR /app/backend
+COPY --chown=homerun:homerun . /app/backend
+
+RUN chown homerun:homerun /app /app/backend \
+    && install -d -o homerun -g homerun /app/data /app/backend/.runtime /app/backend/.runtime/locks
+
+USER homerun
+
+EXPOSE 8000
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
